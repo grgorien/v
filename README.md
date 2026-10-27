@@ -1,76 +1,100 @@
-# v - use vim motions and natively manage your socks
+<p align="center">
+  <img src="assets/_logo.v.png" alt="v logo" width="120" height="120">
+</p>
 
-`v` is a Neovim session manager and lightweight multiplexer replacement. It
-runs as the foreground process of a single terminal window: a picker of
-Neovim sessions that attaches the chosen server with `nvim --server SOCK
---remote-ui` and returns to the picker whenever the client exits. Servers run
-headless and detached, so closing the terminal loses nothing.
+<p align="center">
+  <b>Use vim motions and natively manage your socks.</b><br>
+  A Neovim session manager and lightweight multiplexer written in Go.
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> •
+  <a href="#commands">Commands</a> •
+</p>
+
+---
+
+`v` runs as the foreground process of a single terminal window. It acts as an interactive picker for Neovim sessions, attaches the chosen server using `nvim --server SOCK --remote-ui`, and seamlessly returns to the picker whenever the client exits. 
+
+Because servers run headless and detached, closing your terminal window loses zero state.
+
+---
 
 ## Install
 
-Installs v into $PREFIX/bin (default /usr/local)
+Installs `v` into `$PREFIX/bin` (default `/usr/local`):
 
 ```bash
 make install
 ```
 
-Requirements at runtime: `nvim` and `fzf` on `PATH`. `stty` is used to save
-and restore the terminal.
+### Runtime Requirements
+* **`nvim`** and **`fzf`** available on your `$PATH`.
+* **`stty`** (used to safely save and restore terminal states).
 
-## Neovim mappings it relies on
+---
 
-The hub assumes the user's `init.lua` maps `<leader>d` and terminal-mode
-`<C-\><C-d>` to `:detach`. When the client exits (detach, or the server
-quit), the hub redisplays the picker.
+## Neovim Mappings
+
+The hub relies on your Neovim configuration to handle detaching gracefully. Ensure your `init.lua` maps `<leader>d` and terminal-mode `<C-\><C-d>` to `:detach`:
+
+```lua
+vim.keymap.set('n', '<leader>d', ':detach<CR>', { silent = true })
+vim.keymap.set('t', '<C-\\><C-d>', '<C-\\><C-n>:detach<CR>', { silent = true })
+```
+When the client detaches or the server quits, the hub automatically redisplays the session picker.
+
+---
 
 ## Commands
 
 | Command | Effect |
-| --- | --- |
-| `v` | hub, all rows (live + dormant repos) |
-| `v -j`, `v --jump` | same as `v` |
-| `v -a`, `v --attach` | hub, live rows only |
-| `v -l`, `v --list` | table (`--json` for a JSON array of sessions) |
-| `v -k`, `v --kill` | pick (multi-select) and force-quit sessions |
-| `v -n NAME` | new session `project` or `project.role` |
-| `v -p P` / `v -r R` | project / role for a new session |
-| `v --load PATTERN [DIR]` | new session with up to 40 matching files |
-| `v [DIR]` | new session started in `DIR` |
-| `v [FILES...]` | new session with files (or, inside nvim, open them here) |
-| `v -t X` | inside nvim: send files to session `X` |
-| `v --mv NAME TARGET` | move a session to project or project.role |
-| `v --detached` | create without attaching, print the socket path |
-| `v --startuptime` | pass `--startuptime` to the new server |
-| `v -h`, `v --help` | usage |
+| :--- | :--- |
+| `v` | Open hub (all rows: live + dormant repos) |
+| `v -j`, `v --jump` | Same as `v` |
+| `v -a`, `v --attach` | Open hub (live rows only) |
+| `v -l`, `v --list` | Print session table (`--json` for JSON output) |
+| `v -k`, `v --kill` | Interactive multi-select to force-quit sessions |
+| `v -n NAME` | Create new session (`project` or `project.role`) |
+| `v -p P` / `v -r R` | Specify project / role for a new session |
+| `v --load PATTERN [DIR]` | New session with up to 40 matching files |
+| `v [DIR]` | New session started in `DIR` |
+| `v [FILES...]` | New session with files (or open inside current nvim instance) |
+| `v -t X` | Inside nvim: send files to session `X` |
+| `v --mv NAME TARGET` | Move a session to a new project or role |
+| `v --detached` | Create session without attaching, print socket path |
+| `v --startuptime` | Pass `--startuptime` to the new server |
+| `v -h`, `v --help` | Show usage information |
 
-State lives under `${XDG_STATE_HOME:-$HOME/.local/state}/v`: `sockets/`,
-`logs/`, `mru`.
+---
 
-## Decisions
+## State & Storage
 
-- **Sanitize does not append `_`.** The bash original used a here-string that
-  turned a trailing newline into a trailing `_`. Go's `proj.Sanitize("main")`
-  returns `main`. Existing sockets ending in `_` are still listed as-is.
-- **Managed sockets can be probed directly**, even if `/proc` could not map
-  them. Unmanaged sockets are probed only when `/proc` proves an `nvim`
-  process owns them (A7). This keeps the safety rule: never connect to a
-  socket that is not a Neovim server.
-- **Stale socket removal** happens during discovery (managed paths only) and
-  during spawn when the probe returns connection refused or ENOENT.
-- **Implicit session names** (no `-n`/`-p`/`-r`) walk `project-2`,
-  `project-3`, ... until a free socket path is found; explicit names collide
-  with `session 'NAME' already exists (SOCK)`.
-- **fzf key binding** uses `--expect=ctrl-x,ctrl-n,alt-m`; bare Enter is the
-  empty key. Esc and Ctrl-C (exit 1 / 130) cancel with exit 0 from the hub.
-- **Signals**: the hub catches SIGINT/SIGQUIT and discards them while the
-  child runs (using `signal.Notify`, never `signal.Ignore`). SIGHUP/SIGTERM
-  forward to the child and exit 129/143.
-- **Fast-fail guard**: three consecutive client exits under
-  `FastFailWindow` print `client exited immediately; is the server alive?`
-  and exit 1.
-- **`--load` matching** treats patterns without `/` as basenames and supports
-  `**` segments; the original `find -name '**/*.c'` never matched.
-- **Dormant discovery** accepts `.git` as a directory or a file (worktrees).
-- **Timeouts** are `config.ProbeTimeout` (150 ms) for probes,
-  `config.SpawnTimeout` (3 s) for readiness, `config.KillGrace` (2 s) per kill
-  stage.
+All operational data lives under `${XDG_STATE_HOME:-$HOME/.local/state}/v`:
+* `sockets/` — Active UNIX domain sockets
+* `logs/` — Server logs and debugging output
+* `mru` — Most recently used tracking
+
+---
+
+<details>
+<summary><b>Design Decisions (Click to expand)</b></summary>
+
+* **Sanitization:** Sanitization does not append trailing underscores (`_`). The original bash implementation used a here-string that turned trailing newlines into `_`. Go's `proj.Sanitize("main")` cleanly returns `main` (though legacy sockets ending in `_` remain fully compatible).
+* **Socket Safety & Probing:** Managed sockets are probed directly. Unmanaged sockets are probed only when `/proc` confirms an active `nvim` process owns them, ensuring `v` never accidentally connects to an alien socket.
+* **Stale Socket Cleanup:** Automatically purged during discovery (managed paths) and during spawn attempts if a probe returns connection refused or `ENOENT`.
+* **Implicit Naming:** Omitting `-n`/`-p`/`-r` automatically walks increments (`project-2`, `project-3`, etc.) until a free path is found. Explicit name collisions return a clear error: `session 'NAME' already exists (SOCK)`.
+* **fzf Key Bindings:** Binds `--expect=ctrl-x,ctrl-n,alt-m` (bare Enter is empty). Esc and `Ctrl-C` cancel cleanly with exit code `0` from the hub.
+* **Signal Forwarding:** The hub intercepts `SIGINT`/`SIGQUIT` and suppresses them while a child process runs using `signal.Notify`. `SIGHUP`/`SIGTERM` are correctly forwarded to the child.
+* **Fast-Fail Guard:** Three consecutive rapid client exits within `FastFailWindow` trigger `client exited immediately; is the server alive?` and exit with status `1`.
+* **Pattern Matching (`--load`):** Treats patterns without `/` as basenames and fully supports `**` glob segments.
+* **Dormant Discovery:** Seamlessly recognizes `.git` as either a traditional directory or a git worktree file.
+* **Timeouts:** Configured for `config.ProbeTimeout` (150 ms), `config.SpawnTimeout` (3 s), and `config.KillGrace` (2 s) per termination stage.
+
+</details>
+
+---
+
+## License
+
+Distributed under the MIT License. See `LICENSE` for more information.
