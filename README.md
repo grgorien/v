@@ -9,7 +9,7 @@
 
 <p align="center">
   <a href="#install">Install</a> •
-  <a href="#commands">Commands</a> •
+  <a href="#commands">Commands</a>
 </p>
 
 ---
