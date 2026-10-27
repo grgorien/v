@@ -8,9 +8,10 @@ headless and detached, so closing the terminal loses nothing.
 
 ## Install
 
-`bash
+```bash
     make install    # installs v into $PREFIX/bin (default /usr/local)
-`
+```
+
 Requirements at runtime: `nvim` and `fzf` on `PATH`. `stty` is used to save
 and restore the terminal.
 
