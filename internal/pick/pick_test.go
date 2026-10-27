@@ -50,21 +50,66 @@ func TestBuildRowsDormantExclusion(t *testing.T) {
 	}
 }
 
+func TestBuildRowsFoldsDuplicates(t *testing.T) {
+	// The real carnis.srv lives at the managed path. Its fzf-lua twin is
+	// unmanaged and carries the same identity. The folder must pick the
+	// managed one and expose exactly one row.
+	managed := sess.Session{
+		Name: "carnis.srv", Project: "carnis", Role: "srv",
+		Root: "/home/xi/.wrk/carnis", Sock: "/state/v/sockets/carnis.srv.sock",
+		Managed: true, UIs: 0, Pid: 4242, JobsRunning: 1,
+	}
+	twin := sess.Session{
+		Name: "fzf-lua.1793077903.3016616.0", Project: "carnis", Role: "srv",
+		Root: "/home/xi/.wrk/carnis", Sock: "/tmp/fzf-lua.1793077903.3016616.0",
+		Managed: false, UIs: 0, Pid: 999, JobsRunning: 1,
+	}
+	rows := BuildRows([]sess.Session{twin, managed}, nil, nil, "", false)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 folded row, got %d", len(rows))
+	}
+	if rows[0].Session.Name != "carnis.srv" {
+		t.Fatalf("fold picked %q", rows[0].Session.Name)
+	}
+}
+
+func TestBuildRowsFoldPrefersNoUIsThenShortName(t *testing.T) {
+	// Same identity, both unmanaged, both UIs == 0: the shorter name wins.
+	a := sess.Session{Name: "short", Project: "p", Role: "dev", Root: "/r"}
+	b := sess.Session{Name: "a-much-longer-name", Project: "p", Role: "dev", Root: "/r"}
+	rows := BuildRows([]sess.Session{b, a}, nil, nil, "", false)
+	if len(rows) != 1 || rows[0].Session.Name != "short" {
+		t.Fatalf("got %+v", rows)
+	}
+}
+
+func TestBuildRowsKeepsStrangersSeparate(t *testing.T) {
+	// An unmanaged session with no resolvable project must not be folded
+	// with another stranger, even if role and root match.
+	a := sess.Session{Name: "stranger-a", Role: "-", Root: "/r"}
+	b := sess.Session{Name: "stranger-b", Role: "-", Root: "/r"}
+	rows := BuildRows([]sess.Session{a, b}, nil, nil, "", false)
+	if len(rows) != 2 {
+		t.Fatalf("strangers must not fold, got %d rows", len(rows))
+	}
+}
+
 func TestFormatLinesMarkers(t *testing.T) {
 	rows := []Row{
-		{Kind: "live", Index: 0, Session: &sess.Session{Name: "s", Project: "p", Role: "dev", UIs: 1}},
+		{Kind: "live", Index: 0, Session: &sess.Session{Name: "s", Project: "p", Role: "dev", UIs: 1, Managed: true}},
 		{Kind: "live", Index: 1, Session: &sess.Session{Name: "b", Project: "p", Role: "dev", Busy: true}},
-		{Kind: "live", Index: 2, Session: &sess.Session{Name: "x", Project: "p", Role: "dev"}},
-		{Kind: "new", Index: 3, Repo: &proj.Repo{Name: "r", Path: "/r"}},
+		{Kind: "live", Index: 2, Session: &sess.Session{Name: "x", Project: "p", Role: "dev", Managed: true}},
+		{Kind: "live", Index: 3, Session: &sess.Session{Name: "u", Project: "p", Role: "dev", Managed: false}},
+		{Kind: "new", Index: 4, Repo: &proj.Repo{Name: "r", Path: "/r"}},
 	}
 	lines, header := FormatLines(rows)
 	if header == "" {
 		t.Fatal("empty header")
 	}
-	if len(lines) != 4 {
+	if len(lines) != 5 {
 		t.Fatalf("got %d lines", len(lines))
 	}
-	wants := []string{"@", "!", "*", "+"}
+	wants := []string{"@", "!", "*", "~", "+"}
 	for i, want := range wants {
 		disp := strings.SplitN(lines[i], "\t", 2)[0]
 		if !strings.HasPrefix(disp, want) {

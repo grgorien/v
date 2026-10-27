@@ -42,16 +42,87 @@ type Result struct {
 	Rows   []Row
 }
 
-// BuildRows assembles live and dormant rows per section 9.2.
+// identityKey groups sessions by (project, role, root). Empty projects are
+// never folded: an unmanaged session without a resolvable project is a
+// stranger and stays visible on its own.
+type identityKey struct {
+	Project string
+	Role    string
+	Root    string
+}
+
+// identityOf returns the fold key for s, or ok=false when the session must
+// not be folded (empty project).
+func identityOf(s sess.Session) (identityKey, bool) {
+	if s.Project == "" {
+		return identityKey{}, false
+	}
+	return identityKey{Project: s.Project, Role: s.Role, Root: s.Root}, true
+}
+
+// rankSession orders sessions that share an identity key. Lower is better.
+// Rules, applied in order:
+//  1. managed beats unmanaged (socket inside SockDir)
+//  2. a session with UIs == 0 beats one with UIs (so the canonical name is
+//     the server, not an attached client's phantom)
+//  3. shorter name beats longer (drops the fzf-lua.<epoch>.<pid>.<n> twins)
+//  4. lower pid beats higher pid (stable across runs)
+//  5. lower sock path beats higher (final tie break, deterministic)
+func rankSession(a, b sess.Session) bool {
+	if a.Managed != b.Managed {
+		return a.Managed
+	}
+	au, bu := a.UIs == 0, b.UIs == 0
+	if au != bu {
+		return au
+	}
+	if len(a.Name) != len(b.Name) {
+		return len(a.Name) < len(b.Name)
+	}
+	if a.Pid != b.Pid {
+		return a.Pid < b.Pid
+	}
+	return a.Sock < b.Sock
+}
+
+// foldSessions collapses sessions that share an identity key, keeping the
+// best-ranked representative of each group. Sessions with an empty project
+// are passed through untouched.
+func foldSessions(sessions []sess.Session) []sess.Session {
+	best := map[identityKey]int{}
+	var out []sess.Session
+	var group []int // index in `out` for each identity, ordered for determinism
+	for _, s := range sessions {
+		key, ok := identityOf(s)
+		if !ok {
+			out = append(out, s)
+			continue
+		}
+		if idx, seen := best[key]; seen {
+			if rankSession(s, out[idx]) {
+				out[idx] = s
+			}
+			continue
+		}
+		best[key] = len(out)
+		group = append(group, len(out))
+		out = append(out, s)
+	}
+	_ = group
+	return out
+}
+
+// BuildRows assembles live and dormant rows per section 9.2, with duplicate
+// live sessions folded by (project, role, root).
 func BuildRows(sessions []sess.Session, repos []proj.Repo, mruOrder []string, current string, liveOnly bool) []Row {
+	live := foldSessions(sessions)
+
 	rank := map[string]int{}
 	for i, n := range mruOrder {
 		if _, ok := rank[n]; !ok {
 			rank[n] = i
 		}
 	}
-	live := make([]sess.Session, len(sessions))
-	copy(live, sessions)
 	sort.SliceStable(live, func(i, j int) bool {
 		ri, iok := rank[live[i].Name]
 		rj, jok := rank[live[j].Name]
@@ -118,6 +189,8 @@ func marker(r Row) string {
 			return "!"
 		case r.Session.UIs > 0:
 			return "@"
+		case !r.Session.Managed:
+			return "~"
 		default:
 			return "*"
 		}
